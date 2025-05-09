@@ -1,9 +1,10 @@
 import modal
 import pandas as pd
 import numpy as np
-from fastai.tabular.all import *  # Move this import to the top level
+from fastai.tabular.all import *  
 import xgboost as xgb
 import bentoml
+import pickle
 from pathlib import Path
 import os
 
@@ -19,6 +20,10 @@ image = modal.Image.debian_slim().pip_install([
     "torch"
 ])
 volume = modal.Volume.from_name("sticker-data-volume")
+
+# Define paths for pickle-based model saving
+MODEL_PATH = "/data/sticker_sales_model.pkl"
+PREPROC_PATH = "/data/sticker_sales_preproc.pkl"
 
 @app.function(image=image, volumes={"/data": volume})
 def train_model():
@@ -76,7 +81,25 @@ def train_model():
         }
     )
     
-    print(f"Model saved: {model_tag}")
+    # Save model with pickle
+    print(f"Saving model with pickle to {MODEL_PATH}...")
+    with open(MODEL_PATH, 'wb') as f:
+        pickle.dump(xgb_model, f)
+    
+    # Save preprocessing info separately
+    print(f"Saving preprocessing info to {PREPROC_PATH}...")
+    preproc_info = {
+        "cont_names": cont_names,
+        "cat_names": cat_names,
+        "procs": [Categorify, FillMissing, Normalize]
+    }
+    with open(PREPROC_PATH, 'wb') as f:
+        pickle.dump(preproc_info, f)
+    
+    # Ensure changes are committed to the volume
+    volume.commit()
+    
+    print(f"Model saved: {model_tag} and to pickle files")
     return str(model_tag)
 
 @app.local_entrypoint()
@@ -85,3 +108,4 @@ def main():
     print("Starting model training on Modal...")
     model_tag = train_model.remote()
     print(f"Model training completed. Model tag: {model_tag}")
+    print(f"Model and preprocessing info also saved as pickle files at {MODEL_PATH} and {PREPROC_PATH}")
