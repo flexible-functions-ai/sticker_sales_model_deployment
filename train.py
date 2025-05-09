@@ -1,7 +1,7 @@
 import modal
 import pandas as pd
 import numpy as np
-from fastai.tabular.all import *  # Move this import to the top level
+from fastai.tabular.all import *  
 import xgboost as xgb
 import bentoml
 import pickle
