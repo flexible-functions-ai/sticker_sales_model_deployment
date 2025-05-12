@@ -148,73 +148,192 @@ def serve_model():
        print(traceback.format_exc())
        raise
 
-# CSV upload endpoint 
+# original csv upload endpoint
+# @app.function(image=fastai_image, volumes={"/data": data_volume})
+# @modal.fastapi_endpoint(method="POST")
+# async def predict_csv(file: UploadFile = File(...)):
+#    """API endpoint for batch predictions from a CSV file"""
+#    import xgboost as xgb
+#    import io
+#    import pickle
+#    from fastai.tabular.all import add_datepart, TabularPandas, cont_cat_split
+#    from fastai.tabular.all import Categorify, FillMissing, Normalize, CategoryBlock, RandomSplitter, range_of
+#    from pathlib import Path
+#    
+#    try:
+#        # First, load or train model
+#        model = serve_model.remote()
+#        
+#        # Read uploaded CSV file content
+#        contents = await file.read()
+#        
+#        # Parse CSV data
+#        try:
+#            test_df = pd.read_csv(io.BytesIO(contents))
+#        except Exception as e:
+#            return {
+#                "success": False,
+#                "error": f"Failed to parse uploaded CSV: {str(e)}"
+#            }
+#        
+#        # Load the training data for preprocessing
+#        path = Path('/data/')
+#        train_df = pd.read_csv(path/'train.csv', index_col='id')
+#        train_df = train_df.dropna(subset=['num_sold'])
+#        
+#        # Add date features to both datasets
+#        train_df = add_datepart(train_df, 'date', drop=False)
+#        test_df = add_datepart(test_df, 'date', drop=False)
+#        
+#        # Feature preparation
+#        cont_names, cat_names = cont_cat_split(train_df, dep_var='num_sold')
+#        splits = RandomSplitter(valid_pct=0.2)(range_of(train_df))
+#        
+#        # Create TabularPandas processor
+#        to = TabularPandas(train_df, 
+#                          procs=[Categorify, FillMissing, Normalize],
+#                          cat_names=cat_names,
+#                          cont_names=cont_names,
+#                          y_names='num_sold',
+#                          y_block=CategoryBlock(),
+#                          splits=splits)
+#        
+#        # Create a test dataloader
+#        dls = to.dataloaders(bs=64)
+#        test_dl = dls.test_dl(test_df)
+#        
+#        # Make predictions using our model
+#        predictions = model.predict(test_dl.xs)
+#        
+#        # Return the predictions as a simple list
+#        return predictions.tolist()
+#            
+#    except Exception as e:
+#        import traceback
+#        return {
+#            "success": False,
+#            "error": f"Error processing CSV: {str(e)}",
+#            "traceback": traceback.format_exc()
+#        }
+
+## new predict_csv function with preprocessing step
+# CSV upload endpoint with optimized preprocessing
 @app.function(image=fastai_image, volumes={"/data": data_volume})
 @modal.fastapi_endpoint(method="POST")
 async def predict_csv(file: UploadFile = File(...)):
-   """API endpoint for batch predictions from a CSV file"""
-   import xgboost as xgb
-   import io
-   import pickle
-   from fastai.tabular.all import add_datepart, TabularPandas, cont_cat_split
-   from fastai.tabular.all import Categorify, FillMissing, Normalize, CategoryBlock, RandomSplitter, range_of
-   from pathlib import Path
-   
-   try:
-       # First, load or train model
-       model = serve_model.remote()
-       
-       # Read uploaded CSV file content
-       contents = await file.read()
-       
-       # Parse CSV data
-       try:
-           test_df = pd.read_csv(io.BytesIO(contents))
-       except Exception as e:
-           return {
-               "success": False,
-               "error": f"Failed to parse uploaded CSV: {str(e)}"
-           }
-       
-       # Load the training data for preprocessing
-       path = Path('/data/')
-       train_df = pd.read_csv(path/'train.csv', index_col='id')
-       train_df = train_df.dropna(subset=['num_sold'])
-       
-       # Add date features to both datasets
-       train_df = add_datepart(train_df, 'date', drop=False)
-       test_df = add_datepart(test_df, 'date', drop=False)
-       
-       # Feature preparation
-       cont_names, cat_names = cont_cat_split(train_df, dep_var='num_sold')
-       splits = RandomSplitter(valid_pct=0.2)(range_of(train_df))
-       
-       # Create TabularPandas processor
-       to = TabularPandas(train_df, 
-                         procs=[Categorify, FillMissing, Normalize],
-                         cat_names=cat_names,
-                         cont_names=cont_names,
-                         y_names='num_sold',
-                         y_block=CategoryBlock(),
-                         splits=splits)
-       
-       # Create a test dataloader
-       dls = to.dataloaders(bs=64)
-       test_dl = dls.test_dl(test_df)
-       
-       # Make predictions using our model
-       predictions = model.predict(test_dl.xs)
-       
-       # Return the predictions as a simple list
-       return predictions.tolist()
-           
-   except Exception as e:
-       import traceback
-       return {
-           "success": False,
-           "error": f"Error processing CSV: {str(e)}",
-           "traceback": traceback.format_exc()
-       }
+    """API endpoint for batch predictions from a CSV file using cached preprocessing"""
+    import xgboost as xgb
+    import io
+    import pickle
+    from fastai.tabular.all import add_datepart, TabularPandas, cont_cat_split
+    from fastai.tabular.all import Categorify, FillMissing, Normalize, CategoryBlock, RandomSplitter, range_of
+    from pathlib import Path
+    
+    try:
+        # First, load or train model
+        model = serve_model.remote()
+        
+        # Read uploaded CSV file content
+        contents = await file.read()
+        
+        # Parse CSV data
+        try:
+            test_df = pd.read_csv(io.BytesIO(contents))
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to parse uploaded CSV: {str(e)}"
+            }
+        
+        # Add date features to the test dataset
+        test_df = add_datepart(test_df, 'date', drop=False)
+        
+        # Load saved preprocessing information
+        preproc_path = "/data/sticker_sales_preproc.pkl"
+        
+        if os.path.exists(preproc_path):
+            # Use the saved preprocessing information
+            print(f"Loading preprocessing info from {preproc_path}")
+            with open(preproc_path, 'rb') as f:
+                preproc_info = pickle.load(f)
+                
+            cat_names = preproc_info["cat_names"]
+            cont_names = preproc_info["cont_names"]
+            procs = preproc_info["procs"]
+            
+            # Create a minimal training dataframe with just the necessary structure
+            # for inference - this avoids loading the full training data
+            
+            # Get the categories for each categorical column from our model
+            path = Path('/data/')
+            
+            # We need a small sample of the training data to create the processor
+            # This is much faster than loading the entire dataset
+            train_sample = pd.read_csv(path/'train.csv', index_col='id', nrows=100)
+            train_sample = train_sample.dropna(subset=['num_sold'])
+            train_sample = add_datepart(train_sample, 'date', drop=False)
+            
+            # Create TabularPandas processor with saved parameters
+            splits = RandomSplitter(valid_pct=0.2)(range_of(train_sample))
+            to = TabularPandas(train_sample, 
+                              procs=procs,
+                              cat_names=cat_names,
+                              cont_names=cont_names,
+                              y_names='num_sold',
+                              y_block=CategoryBlock(),
+                              splits=splits)
+            
+            # Create dataloaders
+            dls = to.dataloaders(bs=64)
+            
+            # Process the test data using our saved preprocessing
+            test_dl = dls.test_dl(test_df)
+            
+            # Make predictions
+            predictions = model.predict(test_dl.xs)
+            
+            # Return the predictions as a simple list
+            return predictions.tolist()
+        else:
+            # Fallback to the original approach if preprocessing info isn't available
+            print("Preprocessing info not found, using full training data...")
+            
+            # Load the training data for preprocessing
+            path = Path('/data/')
+            train_df = pd.read_csv(path/'train.csv', index_col='id')
+            train_df = train_df.dropna(subset=['num_sold'])
+            
+            # Feature preparation
+            cont_names, cat_names = cont_cat_split(train_df, dep_var='num_sold')
+            splits = RandomSplitter(valid_pct=0.2)(range_of(train_df))
+            
+            # Create TabularPandas processor
+            to = TabularPandas(train_df, 
+                              procs=[Categorify, FillMissing, Normalize],
+                              cat_names=cat_names,
+                              cont_names=cont_names,
+                              y_names='num_sold',
+                              y_block=CategoryBlock(),
+                              splits=splits)
+            
+            # Create a test dataloader
+            dls = to.dataloaders(bs=64)
+            test_dl = dls.test_dl(test_df)
+            
+            # Make predictions using our model
+            predictions = model.predict(test_dl.xs)
+            
+            # Return the predictions as a simple list
+            return predictions.tolist()
+            
+    except Exception as e:
+        import traceback
+        return {
+            "success": False,
+            "error": f"Error processing CSV: {str(e)}",
+            "traceback": traceback.format_exc()
+        }
+
 
 @app.local_entrypoint()
 def main():
