@@ -218,6 +218,8 @@ def serve_model():
 
 ## new predict_csv function with preprocessing step
 # CSV upload endpoint with optimized preprocessing
+# CSV upload endpoint with optimized preprocessing
+# CSV upload endpoint - with debugging info (commented out)
 @app.function(image=fastai_image, volumes={"/data": data_volume})
 @modal.fastapi_endpoint(method="POST")
 async def predict_csv(file: UploadFile = File(...)):
@@ -225,13 +227,22 @@ async def predict_csv(file: UploadFile = File(...)):
     import xgboost as xgb
     import io
     import pickle
+    import os
+    import traceback
     from fastai.tabular.all import add_datepart, TabularPandas, cont_cat_split
     from fastai.tabular.all import Categorify, FillMissing, Normalize, CategoryBlock, RandomSplitter, range_of
     from pathlib import Path
     
+    # Uncomment for debugging
+    # response_data = {"success": False, "debug_info": {}}
+    
     try:
+        # Debug information
+        # response_data["debug_info"]["step"] = "Starting prediction process"
+        
         # First, load or train model
         model = serve_model.remote()
+        # response_data["debug_info"]["model_loaded"] = True
         
         # Read uploaded CSV file content
         contents = await file.read()
@@ -239,6 +250,8 @@ async def predict_csv(file: UploadFile = File(...)):
         # Parse CSV data
         try:
             test_df = pd.read_csv(io.BytesIO(contents))
+            # response_data["debug_info"]["test_columns"] = test_df.columns.tolist()
+            # response_data["debug_info"]["test_shape_before"] = test_df.shape
         except Exception as e:
             return {
                 "success": False,
@@ -247,84 +260,71 @@ async def predict_csv(file: UploadFile = File(...)):
         
         # Add date features to the test dataset
         test_df = add_datepart(test_df, 'date', drop=False)
+        # response_data["debug_info"]["test_shape_after_datepart"] = test_df.shape
+        # response_data["debug_info"]["test_columns_after_datepart"] = test_df.columns.tolist()
         
-        # Load saved preprocessing information
-        preproc_path = "/data/sticker_sales_preproc.pkl"
+        # Load the full training data to ensure proper preprocessing
+        path = Path('/data/')
+        train_df = pd.read_csv(path/'train.csv', index_col='id')
+        train_df = train_df.dropna(subset=['num_sold'])
         
-        if os.path.exists(preproc_path):
-            # Use the saved preprocessing information
-            print(f"Loading preprocessing info from {preproc_path}")
-            with open(preproc_path, 'rb') as f:
-                preproc_info = pickle.load(f)
-                
-            cat_names = preproc_info["cat_names"]
-            cont_names = preproc_info["cont_names"]
-            procs = preproc_info["procs"]
+        # response_data["debug_info"]["train_columns"] = train_df.columns.tolist()
+        # response_data["debug_info"]["train_shape"] = train_df.shape
+        
+        # Add date features to training data
+        train_df = add_datepart(train_df, 'date', drop=False)
+        # response_data["debug_info"]["train_columns_after_datepart"] = train_df.columns.tolist()
+        
+        # Feature preparation
+        cont_names, cat_names = cont_cat_split(train_df, dep_var='num_sold')
+        # response_data["debug_info"]["categorical_features"] = cat_names
+        # response_data["debug_info"]["continuous_features"] = cont_names
+        
+        # Check if test data has all required columns
+        missing_cols = []
+        for col in cat_names + cont_names:
+            if col not in test_df.columns:
+                missing_cols.append(col)
+        
+        if missing_cols:
+            # response_data["debug_info"]["missing_columns"] = missing_cols
             
-            # Create a minimal training dataframe with just the necessary structure
-            # for inference - this avoids loading the full training data
+            # Add missing columns with default values
+            for col in missing_cols:
+                if col in cat_names:
+                    test_df[col] = "unknown"  # Default value for categorical
+                else:
+                    test_df[col] = 0.0  # Default value for continuous
             
-            # Get the categories for each categorical column from our model
-            path = Path('/data/')
+            # response_data["debug_info"]["columns_added"] = missing_cols
+        
+        # Create TabularPandas processor
+        splits = RandomSplitter(valid_pct=0.2)(range_of(train_df))
+        to = TabularPandas(train_df, 
+                          procs=[Categorify, FillMissing, Normalize],
+                          cat_names=cat_names,
+                          cont_names=cont_names,
+                          y_names='num_sold',
+                          y_block=CategoryBlock(),
+                          splits=splits)
+        
+        # Create dataloaders
+        dls = to.dataloaders(bs=64)
+        
+        # Process the test data and make predictions
+        test_dl = dls.test_dl(test_df)
+        # response_data["debug_info"]["test_xs_shape"] = test_dl.xs.shape
             
-            # We need a small sample of the training data to create the processor
-            # This is much faster than loading the entire dataset
-            train_sample = pd.read_csv(path/'train.csv', index_col='id', nrows=100)
-            train_sample = train_sample.dropna(subset=['num_sold'])
-            train_sample = add_datepart(train_sample, 'date', drop=False)
-            
-            # Create TabularPandas processor with saved parameters
-            splits = RandomSplitter(valid_pct=0.2)(range_of(train_sample))
-            to = TabularPandas(train_sample, 
-                              procs=procs,
-                              cat_names=cat_names,
-                              cont_names=cont_names,
-                              y_names='num_sold',
-                              y_block=CategoryBlock(),
-                              splits=splits)
-            
-            # Create dataloaders
-            dls = to.dataloaders(bs=64)
-            
-            # Process the test data using our saved preprocessing
-            test_dl = dls.test_dl(test_df)
-            
-            # Make predictions
-            predictions = model.predict(test_dl.xs)
-            
-            # Return the predictions as a simple list
-            return predictions.tolist()
-        else:
-            # Fallback to the original approach if preprocessing info isn't available
-            print("Preprocessing info not found, using full training data...")
-            
-            # Load the training data for preprocessing
-            path = Path('/data/')
-            train_df = pd.read_csv(path/'train.csv', index_col='id')
-            train_df = train_df.dropna(subset=['num_sold'])
-            
-            # Feature preparation
-            cont_names, cat_names = cont_cat_split(train_df, dep_var='num_sold')
-            splits = RandomSplitter(valid_pct=0.2)(range_of(train_df))
-            
-            # Create TabularPandas processor
-            to = TabularPandas(train_df, 
-                              procs=[Categorify, FillMissing, Normalize],
-                              cat_names=cat_names,
-                              cont_names=cont_names,
-                              y_names='num_sold',
-                              y_block=CategoryBlock(),
-                              splits=splits)
-            
-            # Create a test dataloader
-            dls = to.dataloaders(bs=64)
-            test_dl = dls.test_dl(test_df)
-            
-            # Make predictions using our model
-            predictions = model.predict(test_dl.xs)
-            
-            # Return the predictions as a simple list
-            return predictions.tolist()
+        # Make predictions
+        predictions = model.predict(test_dl.xs)
+        
+        # Return predictions in the format expected by test_modal_api.py
+        return predictions.tolist()
+        
+        # To return structured response with debug info, use this instead:
+        # response_data["success"] = True
+        # response_data["predictions"] = predictions.tolist()
+        # return response_data
             
     except Exception as e:
         import traceback
