@@ -2,3 +2,6 @@
   netlify:
     - id: 0449113e-b6ae-4997-be2a-875c54e213c3
       url: 'https://www.sticker-sales.flexiblefunctions.com'
+
+  website:
+    google-analytics: "G-2DWSBZQG4Q"  # Your Google Analytics ID
