@@ -2,3 +2,7 @@
   netlify:
     - id: 0449113e-b6ae-4997-be2a-875c54e213c3
       url: 'https://www.sticker-sales.flexiblefunctions.com'
+- source: project
+  netlify:
+    - id: 4920e243-57e5-4344-b7fa-cd21d603aa54
+      url: 'https://courageous-torte-64ece3.netlify.app'
