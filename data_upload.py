@@ -5,8 +5,9 @@ from pathlib import Path
 # Create an app for the data upload
 app = modal.App("sticker-data-upload")
 
-# Image with Feast dependencies (SQLite-based, no Redis)
+# Image with Feast dependencies - FIXED to include setuptools
 image = modal.Image.debian_slim().pip_install([
+    "setuptools",              # FIXED: provides distutils for Python 3.12
     "feast>=0.34.0",           # Feast feature store
     "fastai",                  # For add_datepart function
     "pandas",                  # Data manipulation

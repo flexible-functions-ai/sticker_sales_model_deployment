@@ -11,8 +11,9 @@ import sys
 # Define Modal resources
 app = modal.App("sticker-sales-forecast")
 
-# Image with Feast and ML dependencies
+# Image with Feast and ML dependencies - FIXED to include setuptools
 image = modal.Image.debian_slim().pip_install([
+    "setuptools",              # FIXED: provides distutils for Python 3.12
     "feast>=0.34.0",           # Feast feature store
     "fastai",                  # For date features
     "xgboost",                 # Gradient boosting
