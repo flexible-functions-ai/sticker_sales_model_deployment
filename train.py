@@ -1,111 +1,178 @@
 import modal
 import pandas as pd
 import numpy as np
-from fastai.tabular.all import *  
 import xgboost as xgb
 import bentoml
 import pickle
 from pathlib import Path
 import os
+import sys
 
 # Define Modal resources
 app = modal.App("sticker-sales-forecast")
-image = modal.Image.debian_slim().pip_install([
-    "fastai", 
-    "xgboost", 
-    "bentoml", 
-    "scikit-learn", 
-    "pandas", 
-    "numpy", 
-    "torch"
-])
-volume = modal.Volume.from_name("sticker-data-volume")
 
-# Define paths for pickle-based model saving
-MODEL_PATH = "/data/sticker_sales_model.pkl"
-PREPROC_PATH = "/data/sticker_sales_preproc.pkl"
+# Image with Feast and ML dependencies
+image = modal.Image.debian_slim().pip_install([
+    "feast>=0.34.0",           # Feast feature store
+    "fastai",                  # For date features
+    "xgboost",                 # Gradient boosting
+    "bentoml",                 # Model packaging
+    "scikit-learn",            # ML utilities
+    "pandas",                  # Data manipulation
+    "numpy",                   # Numerical computing
+    "torch",                   # PyTorch (for FastAI)
+    "pyarrow"                  # Parquet support
+])
+
+volume = modal.Volume.from_name("sticker-data-volume")
 
 @app.function(image=image, volumes={"/data": volume})
 def train_model():
-    # No need to import fastai.tabular.all here since we moved it to the top
+    """
+    Train XGBoost model using Feast features.
+    
+    This function:
+    1. Loads training data
+    2. Uses Feast to generate consistent features
+    3. Trains XGBoost model
+    4. Saves model with BentoML and pickle
+    """
+    # Add the data directory to Python path
+    sys.path.append('/data')
+    
+    print("🚀 Starting Feast-enabled model training...")
+    
+    # Import Feast utilities
+    try:
+        from feast_utils import FeastFeatureProcessor
+        from feast import FeatureStore
+    except ImportError as e:
+        print(f"❌ Error importing Feast utilities: {e}")
+        print("💡 Make sure feast_utils.py and feature_repo are uploaded")
+        raise
     
     # Set up paths
     path = Path('/data/')
     
-    # Check if data files exist
-    print("Files available in volume:")
+    print("📋 Files available in volume:")
     for file in path.glob("*"):
         print(f" - {file}")
     
     # Load data
-    print("Loading data...")
+    print("📊 Loading training data...")
     train_df = pd.read_csv(path/'train.csv', index_col='id')
-    test_df = pd.read_csv(path/'test.csv', index_col='id')
     
-    # Data preprocessing
-    print("Preprocessing data...")
+    # Remove rows with missing target values
+    print(f"📈 Original training data shape: {train_df.shape}")
     train_df = train_df.dropna(subset=['num_sold'])
-    train_df = add_datepart(train_df, 'date', drop=False)
-    test_df = add_datepart(test_df, 'date', drop=False)
+    print(f"📉 After removing missing targets: {train_df.shape}")
     
-    # Feature preparation
-    cont_names, cat_names = cont_cat_split(train_df, dep_var='num_sold')
-    splits = RandomSplitter(valid_pct=0.2)(range_of(train_df))
-    to = TabularPandas(train_df, procs=[Categorify, FillMissing, Normalize],
-                      cat_names=cat_names,
-                      cont_names=cont_names,
-                      y_names='num_sold',
-                      y_block=CategoryBlock(),
-                      splits=splits)
-    dls = to.dataloaders(bs=64)
+    # Initialize Feast processor
+    print("🎛️ Initializing Feast feature processor...")
+    processor = FeastFeatureProcessor(
+        repo_path="/data/feature_repo",
+        data_path="/data"
+    )
     
-    # Prepare training data
-    X_train, y_train = to.train.xs, to.train.ys.values.ravel()
-    X_test, y_test = to.valid.xs, to.valid.ys.values.ravel()
+    # Prepare feature data for Feast
+    print("🔧 Preparing feature data...")
+    feature_df = processor.prepare_feature_data(train_df, is_training=True)
+    processor.save_feature_data(feature_df)
+    
+    # Create entity DataFrame for feature retrieval
+    entity_df = feature_df[['sticker_id', 'event_timestamp']].copy()
+    print(f"🎯 Entity DataFrame shape: {entity_df.shape}")
+    
+    # Get features using Feast
+    print("🔍 Retrieving features from Feast...")
+    training_features = processor.get_training_features(entity_df)
+    
+    # Merge with target variable
+    # First, create a mapping from original index to sticker_id
+    train_with_id = train_df.reset_index()
+    train_with_id['sticker_id'] = (
+        train_with_id['country'].astype(str) + "_" + 
+        train_with_id['store'].astype(str) + "_" + 
+        train_with_id['product'].astype(str)
+    )
+    
+    # Merge training features with targets
+    final_training_df = training_features.merge(
+        train_with_id[['sticker_id', 'num_sold']],
+        on='sticker_id',
+        how='inner'
+    )
+    
+    print(f"🎯 Final training data shape: {final_training_df.shape}")
+    
+    # Prepare features and target
+    feature_columns = [col for col in final_training_df.columns 
+                      if col not in ['sticker_id', 'event_timestamp', 'num_sold']]
+    
+    X = final_training_df[feature_columns]
+    y = final_training_df['num_sold']
+    
+    print(f"📊 Feature matrix shape: {X.shape}")
+    print(f"🎯 Target shape: {y.shape}")
+    print(f"📝 Feature columns: {feature_columns}")
     
     # Train XGBoost model
-    print("Training XGBoost model...")
-    xgb_model = xgb.XGBRegressor()
-    xgb_model = xgb_model.fit(X_train, y_train)
+    print("🤖 Training XGBoost model...")
+    xgb_model = xgb.XGBRegressor(
+        n_estimators=100,
+        max_depth=6,
+        learning_rate=0.1,
+        random_state=42
+    )
+    xgb_model.fit(X, y)
     
-    # Save model with BentoML
-    print("Saving model with BentoML...")
+    # Calculate training metrics
+    train_predictions = xgb_model.predict(X)
+    train_rmse = np.sqrt(np.mean((y - train_predictions) ** 2))
+    print(f"📈 Training RMSE: {train_rmse:.4f}")
+    
+    # Save model with BentoML including Feast metadata
+    print("💾 Saving model with BentoML...")
     model_tag = bentoml.xgboost.save_model(
-        "sticker_sales_v1", 
+        "sticker_sales_feast_v1", 
         xgb_model,
         custom_objects={
-            "preprocessor": {
-                "cont_names": cont_names,
-                "cat_names": cat_names
-            }
+            "feature_columns": feature_columns,
+            "training_rmse": train_rmse,
+            "feast_repo_path": "/data/feature_repo",
+            "model_type": "feast_enabled",
+            "feature_count": len(feature_columns)
         }
     )
     
-    # Save model with pickle
-    print(f"Saving model with pickle to {MODEL_PATH}...")
-    with open(MODEL_PATH, 'wb') as f:
-        pickle.dump(xgb_model, f)
+    # Also save as pickle for backup
+    model_path = "/data/sticker_sales_feast_model.pkl"
+    print(f"💾 Saving model to pickle at {model_path}...")
     
-    # Save preprocessing info separately
-    print(f"Saving preprocessing info to {PREPROC_PATH}...")
-    preproc_info = {
-        "cont_names": cont_names,
-        "cat_names": cat_names,
-        "procs": [Categorify, FillMissing, Normalize]
+    model_data = {
+        'model': xgb_model,
+        'feature_columns': feature_columns,
+        'training_rmse': train_rmse,
+        'feast_repo_path': "/data/feature_repo",
+        'model_type': "feast_enabled",
+        'feature_count': len(feature_columns)
     }
-    with open(PREPROC_PATH, 'wb') as f:
-        pickle.dump(preproc_info, f)
+    
+    with open(model_path, 'wb') as f:
+        pickle.dump(model_data, f)
     
     # Ensure changes are committed to the volume
     volume.commit()
     
-    print(f"Model saved: {model_tag} and to pickle files")
+    print(f"🎉 Model saved with Feast: {model_tag}")
+    print("✅ Training completed successfully!")
     return str(model_tag)
 
 @app.local_entrypoint()
 def main():
-    # Train the model remotely
-    print("Starting model training on Modal...")
+    """
+    Local entry point for model training.
+    """
+    print("🚀 Starting Feast-enabled model training on Modal...")
     model_tag = train_model.remote()
-    print(f"Model training completed. Model tag: {model_tag}")
-    print(f"Model and preprocessing info also saved as pickle files at {MODEL_PATH} and {PREPROC_PATH}")
+    print(f"🎉 Model training completed. Model tag: {model_tag}")
