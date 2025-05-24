@@ -150,11 +150,6 @@ def create_dashboard():
         # Load data and get predictions
         df = load_and_predict_data('temp_test.csv')
         
-        # Ensure we have the predicted_sales column
-        if 'predicted_sales' not in df.columns:
-            st.error("No predicted_sales column found!")
-            return
-        
         # Convert date column to datetime if not already
         df['date'] = pd.to_datetime(df['date'])
         
@@ -237,14 +232,10 @@ def create_dashboard():
             """, unsafe_allow_html=True)
             
         with col3:
-            if len(filtered_df) > 0:
-                top_store = (filtered_df.groupby('store')['predicted_sales']
-                            .sum().sort_values(ascending=False).index[0])
-                store_sales = (filtered_df.groupby('store')['predicted_sales']
-                             .sum().sort_values(ascending=False).iloc[0])
-            else:
-                top_store = "No data"
-                store_sales = 0
+            top_store = (filtered_df.groupby('store')['predicted_sales']
+                        .sum().sort_values(ascending=False).index[0])
+            store_sales = (filtered_df.groupby('store')['predicted_sales']
+                         .sum().sort_values(ascending=False).iloc[0])
             
             st.markdown(f"""
                 <div class="metric-card">
@@ -255,14 +246,10 @@ def create_dashboard():
             """, unsafe_allow_html=True)
             
         with col4:
-            if len(filtered_df) > 0:
-                top_product = (filtered_df.groupby('product')['predicted_sales']
-                              .sum().sort_values(ascending=False).index[0])
-                product_sales = (filtered_df.groupby('product')['predicted_sales']
-                               .sum().sort_values(ascending=False).iloc[0])
-            else:
-                top_product = "No data"
-                product_sales = 0
+            top_product = (filtered_df.groupby('product')['predicted_sales']
+                          .sum().sort_values(ascending=False).index[0])
+            product_sales = (filtered_df.groupby('product')['predicted_sales']
+                           .sum().sort_values(ascending=False).iloc[0])
             
             st.markdown(f"""
                 <div class="metric-card">
@@ -276,71 +263,49 @@ def create_dashboard():
         daily_sales = filtered_df.groupby('date')['predicted_sales'].sum().reset_index()
         
         # Create the line chart using Plotly with dark theme
-        if len(daily_sales) > 0:
-            fig = px.line(
-                daily_sales,
-                x='date',
-                y='predicted_sales',
-                title='Predicted Daily Sales Over Time'
-            )
-            
-            # Update layout for dark theme
-            fig.update_layout(
-                template="plotly_dark",
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                xaxis_title="Date",
-                yaxis_title="Predicted Sales",
-                hovermode='x unified',
-                showlegend=True,
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="right",
-                    x=1
-                )
-            )
-            
-            # Add trend line if we have enough data
-            if len(daily_sales) > 7:
-                fig.add_scatter(
-                    x=daily_sales['date'],
-                    y=daily_sales['predicted_sales'].rolling(7).mean(),
-                    name='7-day trend',
-                    line=dict(dash='dash', color='#48BB78'),
-                    visible='legendonly'
-                )
-            
-            # Display the plot
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("No data to plot after filtering")
+        fig = px.line(
+            daily_sales,
+            x='date',
+            y='predicted_sales',
+            title='Predicted Daily Sales Over Time'
+        )
         
-        # Display detailed data view WITHOUT using st.dataframe (PyArrow-free)
+        # Update layout for dark theme
+        fig.update_layout(
+            template="plotly_dark",
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            xaxis_title="Date",
+            yaxis_title="Predicted Sales",
+            hovermode='x unified',
+            showlegend=True,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
+        )
+        
+        # Add trend line
+        fig.add_scatter(
+            x=daily_sales['date'],
+            y=daily_sales['predicted_sales'].rolling(7).mean(),
+            name='7-day trend',
+            line=dict(dash='dash', color='#48BB78'),
+            visible='legendonly'
+        )
+        
+        # Display the plot
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Display detailed data view
         st.subheader("Detailed Data View")
-        
-        # Convert to HTML table instead of using st.dataframe
-        sorted_df = filtered_df.sort_values('date')
-        
-        # Display using st.table (doesn't require PyArrow) or HTML
-        if len(sorted_df) > 0:
-            # Option 1: Use st.table (simple, no PyArrow needed)
-            st.table(sorted_df.head(20))  # Show first 20 rows
-            
-            if len(sorted_df) > 20:
-                st.info(f"Showing first 20 rows out of {len(sorted_df)} total rows")
-                
-                # Option 2: Download button for full data
-                csv = sorted_df.to_csv(index=False)
-                st.download_button(
-                    label="Download full data as CSV",
-                    data=csv,
-                    file_name='prediction_results.csv',
-                    mime='text/csv'
-                )
-        else:
-            st.warning("No data to display after filtering")
+        st.dataframe(
+            filtered_df.sort_values('date'),
+            hide_index=True
+        )
 
 if __name__ == "__main__":
     # Set page configuration at the very beginning
