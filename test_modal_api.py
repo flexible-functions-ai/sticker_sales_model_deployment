@@ -2,13 +2,13 @@ import requests
 import pandas as pd
 import io
 
-# Update URL to use the Feast endpoint
+# Updated URL to use the Feast endpoint
 url = "https://flexible-functions-ai--sticker-sales-api-predict-csv-feast.modal.run"
 
 print("🧪 Testing Feast-enabled Sticker Sales API")
 print("=" * 50)
 
-# Create a sample CSV with test data
+# Create a sample CSV with test data (expanded for better testing)
 test_data = pd.DataFrame([
     {
         "date": "2023-01-15",
@@ -77,12 +77,13 @@ try:
                 
                 print("✅ Prediction successful!")
                 
+                # Display model information if available
                 if model_info:
-                    print(f"🤖 Model info:")
+                    print(f"\n🤖 Model information:")
                     for key, value in model_info.items():
-                        print(f"   {key}: {value}")
+                        print(f"   • {key}: {value}")
                 
-                if isinstance(predictions, list):
+                if isinstance(predictions, list) and len(predictions) == len(test_data):
                     # Create a DataFrame with predictions
                     result_df = test_data.copy()
                     result_df['predicted_sales'] = predictions
@@ -92,36 +93,53 @@ try:
                     print(result_df.to_string(index=False))
                     
                     print(f"\n📊 Prediction statistics:")
-                    print(f"   Count: {len(predictions)}")
-                    print(f"   Min: {min(predictions):.2f}")
-                    print(f"   Max: {max(predictions):.2f}")
-                    print(f"   Mean: {sum(predictions)/len(predictions):.2f}")
+                    print(f"   • Count: {len(predictions)}")
+                    print(f"   • Min: {min(predictions):.2f}")
+                    print(f"   • Max: {max(predictions):.2f}")
+                    print(f"   • Mean: {sum(predictions)/len(predictions):.2f}")
+                    print(f"   • Std: {pd.Series(predictions).std():.2f}")
                 else:
+                    print(f"⚠️ Unexpected prediction format or count mismatch")
                     print(f"📄 Raw predictions: {predictions}")
             else:
                 # Error response
                 print("❌ Prediction failed!")
-                print(f"   Error: {result.get('error', 'Unknown error')}")
+                print(f"   • Error: {result.get('error', 'Unknown error')}")
                 if 'traceback' in result:
-                    print(f"   Traceback: {result['traceback'][:500]}...")
+                    print(f"   • Traceback: {result['traceback'][:500]}...")
         else:
-            # Direct prediction list
-            predictions = result
-            result_df = test_data.copy()
-            result_df['predicted_sales'] = predictions
-            
-            print("✅ Prediction successful!")
-            print(f"\n📈 Prediction results:")
-            print("=" * 80)
-            print(result_df.to_string(index=False))
+            # Direct prediction list (fallback for simple responses)
+            if isinstance(result, list) and len(result) == len(test_data):
+                predictions = result
+                result_df = test_data.copy()
+                result_df['predicted_sales'] = predictions
+                
+                print("✅ Prediction successful!")
+                print(f"\n📈 Prediction results:")
+                print("=" * 80)
+                print(result_df.to_string(index=False))
+                
+                print(f"\n📊 Prediction statistics:")
+                print(f"   • Count: {len(predictions)}")
+                print(f"   • Min: {min(predictions):.2f}")
+                print(f"   • Max: {max(predictions):.2f}")
+                print(f"   • Mean: {sum(predictions)/len(predictions):.2f}")
+            else:
+                print(f"⚠️ Unexpected response format: {type(result)}")
+                print(f"📄 Raw response: {result}")
     
     except Exception as e:
-        print(f"❌ Error parsing response: {e}")
+        print(f"❌ Error parsing JSON response: {e}")
         print(f"📄 Response text (first 500 chars): {response.text[:500]}")
 
+except requests.exceptions.Timeout:
+    print(f"⏰ Request timeout after 60 seconds")
+except requests.exceptions.ConnectionError:
+    print(f"🔌 Connection error - check if the API is running")
 except requests.exceptions.RequestException as e:
     print(f"❌ Network error: {e}")
 except Exception as e:
     print(f"❌ Unexpected error: {e}")
 
-print("\n🏁 Test completed!")
+print(f"\n🏁 Test completed!")
+print("=" * 50)

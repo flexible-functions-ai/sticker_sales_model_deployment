@@ -5,15 +5,16 @@ from pathlib import Path
 # Create an app for the data upload
 app = modal.App("sticker-data-upload")
 
-# Image with Feast dependencies - FIXED to include setuptools
-image = modal.Image.debian_slim().pip_install([
-    "setuptools",              # FIXED: provides distutils for Python 3.12
-    "feast>=0.34.0",           # Feast feature store
-    "fastai",                  # For add_datepart function
-    "pandas",                  # Data manipulation
-    "pyarrow",                 # Parquet file support
-    "scikit-learn"             # ML utilities
-])
+# Image with Feast dependencies - FIXED for Python 3.12 compatibility
+image = (modal.Image.debian_slim()
+         .pip_install("setuptools>=68.0.0")  # Install setuptools first
+         .pip_install([
+             "feast>=0.34.0",           # Feast feature store
+             "fastai",                  # For add_datepart function
+             "pandas",                  # Data manipulation
+             "pyarrow",                 # Parquet file support
+             "scikit-learn"             # ML utilities
+         ]))
 
 # Create a volume to persist data
 volume = modal.Volume.from_name("sticker-data-volume", create_if_missing=True)
@@ -22,12 +23,6 @@ volume = modal.Volume.from_name("sticker-data-volume", create_if_missing=True)
 def upload_data_and_init_feast(local_data_path):
     """
     Upload data to Modal volume and initialize Feast feature store.
-    
-    This function:
-    1. Copies all data files to Modal volume
-    2. Copies Feast configuration and utilities
-    3. Initializes Feast feature registry
-    4. Prepares and materializes features if training data exists
     """
     import shutil
     import os
@@ -41,32 +36,62 @@ def upload_data_and_init_feast(local_data_path):
     
     # Copy all files from the local data directory to the volume
     print("📁 Copying data files...")
-    for file in Path(local_data_path).glob("*"):
+    local_path = Path(local_data_path)
+    if not local_path.exists():
+        print(f"❌ Local data path {local_data_path} doesn't exist!")
+        return False
+    
+    for file in local_path.glob("*"):
         dest = f"/data/{file.name}"
         if file.is_file():
             shutil.copy(file, dest)
             print(f"   ✅ Copied {file} to {dest}")
     
-    # Copy feature repository to volume
-    feature_repo_path = Path("feature_repo")
+    # Copy feature repository to volume - check current directory
+    print("📁 Looking for feature_repo...")
+    current_dir = Path(".")
+    feature_repo_path = current_dir / "feature_repo"
+    
     if feature_repo_path.exists():
         dest_repo = "/data/feature_repo"
         if os.path.exists(dest_repo):
             shutil.rmtree(dest_repo)
         shutil.copytree(feature_repo_path, dest_repo)
         print(f"   ✅ Copied feature_repo to {dest_repo}")
+        
+        # List contents of copied feature_repo
+        print("   📋 Feature repo contents:")
+        for item in Path(dest_repo).rglob("*"):
+            print(f"      - {item}")
     else:
-        print("   ❌ feature_repo directory not found!")
-        return
+        print("   ❌ feature_repo directory not found in current directory!")
+        print(f"   🔍 Current directory contents: {list(current_dir.glob('*'))}")
+        return False
     
-    # Copy feast utilities (from root level)
-    feast_utils_path = Path("feast_utils.py")
+    # Copy feast utilities - check current directory
+    print("📁 Looking for feast_utils.py...")
+    feast_utils_path = current_dir / "feast_utils.py"
+    
     if feast_utils_path.exists():
-        shutil.copy(feast_utils_path, "/data/feast_utils.py")
-        print("   ✅ Copied feast_utils.py to volume")
+        dest_utils = "/data/feast_utils.py"
+        shutil.copy(feast_utils_path, dest_utils)
+        print(f"   ✅ Copied feast_utils.py to {dest_utils}")
+        print(f"   📊 File size: {feast_utils_path.stat().st_size} bytes")
     else:
-        print("   ❌ feast_utils.py not found in root directory!")
-        return
+        print("   ❌ feast_utils.py not found in current directory!")
+        print(f"   🔍 Current directory contents: {list(current_dir.glob('*.py'))}")
+        return False
+    
+    # Commit changes to volume before proceeding
+    print("💾 Committing files to volume...")
+    volume.commit()
+    
+    # Verify files were copied
+    print("🔍 Verifying copied files...")
+    data_path = Path("/data")
+    print("   📋 Files in /data:")
+    for item in data_path.glob("*"):
+        print(f"      - {item}")
     
     # Initialize Feast feature store
     print("🎛️ Initializing Feast feature store...")
@@ -91,7 +116,12 @@ def upload_data_and_init_feast(local_data_path):
             
             # Import utilities here after they're available
             sys.path.append('/data')
-            from feast_utils import FeastFeatureProcessor
+            try:
+                from feast_utils import FeastFeatureProcessor
+                print("   ✅ Successfully imported FeastFeatureProcessor")
+            except ImportError as e:
+                print(f"   ❌ Failed to import FeastFeatureProcessor: {e}")
+                return False
             
             # Load training data
             print("   📊 Loading training data...")
@@ -124,24 +154,30 @@ def upload_data_and_init_feast(local_data_path):
         print(f"❌ Feast command failed: {e}")
         print(f"📄 Stdout: {e.stdout}")
         print(f"📄 Stderr: {e.stderr}")
-        raise
+        return False
+    except Exception as e:
+        print(f"❌ Error during Feast initialization: {e}")
+        return False
     
-    # List files to confirm upload
-    print("\n📋 Files in Modal volume:")
-    for file in Path("/data").glob("*"):
-        print(f" - {file}")
+    # Final commit
+    volume.commit()
     
     print("🎉 Data upload and Feast initialization complete!")
+    return True
 
 @app.local_entrypoint()
 def main():
-    """
-    Local entry point for data upload.
-    """
+    """Local entry point for data upload."""
     if len(sys.argv) > 1:
         data_path = sys.argv[1]
     else:
         data_path = "./data"  # Default path
     
     print(f"🎯 Uploading data from {data_path} and initializing Feast...")
-    upload_data_and_init_feast.remote(data_path)
+    success = upload_data_and_init_feast.remote(data_path)
+    
+    if success:
+        print("✅ Upload completed successfully!")
+    else:
+        print("❌ Upload failed!")
+        sys.exit(1)

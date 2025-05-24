@@ -11,19 +11,20 @@ import sys
 # Define Modal resources
 app = modal.App("sticker-sales-forecast")
 
-# Image with Feast and ML dependencies - FIXED to include setuptools
-image = modal.Image.debian_slim().pip_install([
-    "setuptools",              # FIXED: provides distutils for Python 3.12
-    "feast>=0.34.0",           # Feast feature store
-    "fastai",                  # For date features
-    "xgboost",                 # Gradient boosting
-    "bentoml",                 # Model packaging
-    "scikit-learn",            # ML utilities
-    "pandas",                  # Data manipulation
-    "numpy",                   # Numerical computing
-    "torch",                   # PyTorch (for FastAI)
-    "pyarrow"                  # Parquet support
-])
+# Image with Feast and ML dependencies - FIXED for Python 3.12 compatibility
+image = (modal.Image.debian_slim()
+         .pip_install("setuptools>=68.0.0")  # Install setuptools first
+         .pip_install([
+             "feast>=0.34.0",           # Feast feature store
+             "fastai",                  # For date features
+             "xgboost",                 # Gradient boosting
+             "bentoml",                 # Model packaging
+             "scikit-learn",            # ML utilities
+             "pandas",                  # Data manipulation
+             "numpy",                   # Numerical computing
+             "torch",                   # PyTorch (for FastAI)
+             "pyarrow"                  # Parquet support
+         ]))
 
 volume = modal.Volume.from_name("sticker-data-volume")
 

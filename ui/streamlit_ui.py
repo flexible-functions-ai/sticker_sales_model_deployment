@@ -16,7 +16,9 @@ def load_and_predict_data(csv_path):
         test_df = pd.read_csv(csv_path)
         
         # Set the API URL
-        api_url = "https://flexible-functions-ai--sticker-sales-api-predict-csv.modal.run"
+        #api_url = "https://flexible-functions-ai--sticker-sales-api-predict-csv.modal.run"
+        api_url = "https://flexible-functions-ai--sticker-sales-api-predict-csv-feast.modal.run"
+        
         
         # Prepare the file for upload using proper multipart/form-data format
         with open(csv_path, 'rb') as f:
